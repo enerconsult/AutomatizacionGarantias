@@ -3,13 +3,20 @@ import os
 from datetime import datetime, timedelta
 import calendar
 import locale
+from requests.adapters import HTTPAdapter
+
 try:
     import pandas as pd
 except ImportError:
     pd = None
     print("Advertencia: pandas no está instalado. No se podrá procesar archivos TIE.")
 
-# ... (resto de imports y constantes igual)
+# Configuración de Sesión Global para reutilización de conexiones
+session = requests.Session()
+# Ajustamos pool_maxsize para coincidir con los workers del ThreadPoolExecutor (20)
+adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20)
+session.mount('https://', adapter)
+session.mount('http://', adapter)
 
 
 try:
@@ -148,11 +155,12 @@ def download_file(url, filename, save_dir="Descargas_XM"):
         
     save_path = os.path.join(save_dir, filename)
     
-    print(f"Descargando: {filename}...")
-    print(f"URL: {url}")
+    # print(f"Descargando: {filename}...") # Comentado para evitar spam en hilos
+    # print(f"URL: {url}")
     
     try:
-        response = requests.get(url, stream=True)
+        # Usamos la sesión global
+        response = session.get(url, stream=True, timeout=30)
         response.raise_for_status() # Lanza error si es 404, 403, etc.
         
         with open(save_path, 'wb') as f:
@@ -160,11 +168,11 @@ def download_file(url, filename, save_dir="Descargas_XM"):
                 f.write(chunk)
         print(f"¡Éxito! Guardado en: {save_path}")
         return True
-    except requests.exceptions.HTTPError as err:
-        print(f"Error HTTP: {err}")
+    except requests.exceptions.HTTPError:
+        # No imprimimos error 404 para no saturar consola en brute-force
         return False
     except Exception as e:
-        print(f"Error general: {e}")
+        print(f"Error general en {filename}: {e}")
         return False
 
 def clean_tie_file(filepath):
@@ -457,4 +465,3 @@ def _extract_date_from_name(filename):
 
 if __name__ == "__main__":
     pass
-

@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 import threading
 import sys
 import os
+import queue
+import concurrent.futures
 
 # Importar lógica del script existente
 # Asegúrate de que download_xm_file.py esté en la misma carpeta
@@ -122,11 +124,41 @@ class XMDownloaderApp(tk.Tk):
         
         self.esquemas_data = download_xm_file.ESQUEMAS
         
+        # Cola para comunicación entre hilos
+        self.msg_queue = queue.Queue()
+
         self.create_widgets()
         # Inicializar combo de esquemas
         self.cmb_scheme['values'] = list(self.esquemas_data.keys())
         self.cmb_scheme.current(0)
         self.on_scheme_change()
+
+        # Iniciar polling de la cola
+        self.after(100, self.check_queue)
+
+    def check_queue(self):
+        """Revisa la cola de mensajes para actualizar la GUI desde el hilo principal."""
+        try:
+            while True:
+                msg_type, data = self.msg_queue.get_nowait()
+
+                if msg_type == "LOG":
+                    self.txt_log.insert(tk.END, data + "\n")
+                    self.txt_log.see(tk.END)
+                elif msg_type == "ENABLE_BTN":
+                    self.btn_run.config(state='normal')
+                elif msg_type == "MSGBOX":
+                    title, msg = data
+                    messagebox.showinfo(title, msg)
+                elif msg_type == "ERRORBOX":
+                    title, msg = data
+                    messagebox.showerror(title, msg)
+
+                self.msg_queue.task_done()
+        except queue.Empty:
+            pass
+        finally:
+            self.after(100, self.check_queue)
 
     def create_widgets(self):
         style = ttk.Style()
@@ -224,8 +256,8 @@ class XMDownloaderApp(tk.Tk):
             self.ent_folder.insert(0, folder)
 
     def log(self, message):
-        self.txt_log.insert(tk.END, message + "\n")
-        self.txt_log.see(tk.END)
+        """Envia el mensaje a la cola para ser procesado por el hilo principal."""
+        self.msg_queue.put(("LOG", message))
 
     def start_download_thread(self):
         self.btn_run.config(state='disabled')
@@ -249,99 +281,118 @@ class XMDownloaderApp(tk.Tk):
                          args=(start_date, end_date, scheme, selected_file, root_dir), 
                          daemon=True).start()
 
+    def download_worker(self, url, filename, scheme_folder, scheme):
+        """Helper function to run in a thread worker."""
+        try:
+            success = download_xm_file.download_file(url, filename, scheme_folder)
+
+            if success:
+                msg = f"[OK] Descargado: {filename}"
+                # Post-procesamiento para TIE
+                if scheme == "TIE":
+                    full_path = os.path.join(scheme_folder, filename)
+                    # Llamar a la función de limpieza
+                    new_path, error_msg = download_xm_file.clean_tie_file(full_path)
+
+                    if new_path:
+                        new_filename = os.path.basename(new_path)
+                        if new_filename != filename:
+                             msg += f"\n[INFO] Convertido y Limpiado: {new_filename}"
+                        else:
+                             msg += "\n[INFO] Archivo TIE Limpiado."
+                    else:
+                        msg += f"\n[WARN] No se pudo limpiar TIE: {error_msg}"
+                return True, msg
+            return False, None
+        except Exception as e:
+            return False, f"[ERROR] {filename}: {str(e)}"
+
     def run_download_process(self, start_date, end_date, scheme, selected_file, root_dir):
-        current_date = start_date
-        delta = timedelta(days=1)
-        found_count = 0
-        days_count = 0
+        try:
+            current_date = start_date
+            delta = timedelta(days=1)
+            found_count = 0
+            days_count = 0
 
-        # Crear subcarpeta del esquema
-        scheme_folder = os.path.join(root_dir, scheme)
-        if not os.path.exists(scheme_folder):
-            try:
-                os.makedirs(scheme_folder)
-                self.log(f"Creada carpeta: {scheme_folder}")
-            except OSError as e:
-                self.log(f"[ERROR] No se pudo crear carpeta: {e}")
-                self.btn_run.config(state='normal')
-                return
+            # Crear subcarpeta del esquema
+            scheme_folder = os.path.join(root_dir, scheme)
+            if not os.path.exists(scheme_folder):
+                try:
+                    os.makedirs(scheme_folder)
+                    self.log(f"Creada carpeta: {scheme_folder}")
+                except OSError as e:
+                    self.log(f"[ERROR] No se pudo crear carpeta: {e}")
+                    self.msg_queue.put(("ENABLE_BTN", None))
+                    return
 
-        # Determinar lista de archivos a probar
-        files_to_try = []
-        if selected_file.startswith("--- TODOS"):
-            files_to_try = self.esquemas_data[scheme]["archivos"]
-            self.log(f"Modo: Escaneando TODOS los archivos del esquema '{scheme}'...")
-        else:
-            files_to_try = [selected_file]
-            self.log(f"Modo: Buscando solo '{selected_file}'...")
+            # Determinar lista de archivos a probar
+            files_to_try = []
+            if selected_file.startswith("--- TODOS"):
+                files_to_try = self.esquemas_data[scheme]["archivos"]
+                self.log(f"Modo: Escaneando TODOS los archivos del esquema '{scheme}'...")
+            else:
+                files_to_try = [selected_file]
+                self.log(f"Modo: Buscando solo '{selected_file}'...")
 
-        self.log(f"Guardando en: {scheme_folder}")
+            self.log(f"Guardando en: {scheme_folder}")
 
-        # Versiones a probar
-        versions = ["", "_V2"]
+            # Generar todas las tareas
+            tasks = []
+            versions = ["", "_V2"]
+            extensions = [".xlsx", ".XLSX", ".xls", ".XLS"]
 
-        while current_date <= end_date:
-            days_count += 1
-            # date_str = current_date.strftime("%Y-%m-%d")
-            
-            for file_base in files_to_try:
-                # Generar variaciones de nombre para robustez (espacios extra, etc.)
-                variations = [
-                    file_base,                     # Normal: "GARANTIA SEMANAL" -> "GARANTIA SEMANAL 23ENE..."
-                    file_base + " ",               # Doble espacio antes de fecha: "GARANTIA SEMANAL  23ENE..."
-                    file_base.replace(" ", "  ")   # Doble espacio interno: "GARANTIA  SEMANAL 23ENE..."
-                ]
+            # Loop dates
+            temp_date = start_date
+            while temp_date <= end_date:
+                days_count += 1
                 
-                # Eliminar duplicados si no hay espacios internos
-                variations = list(set(variations))
+                for file_base in files_to_try:
+                    variations = [
+                        file_base,
+                        file_base + " ",
+                        file_base.replace(" ", "  ")
+                    ]
+                    variations = list(set(variations))
+
+                    for variant in variations:
+                        for ver in versions:
+                            for ext in extensions:
+                                url, filename = download_xm_file.get_xm_url(variant, temp_date, esquema_nombre=scheme, version_suffix=ver, extension=ext)
+                                tasks.append((url, filename, scheme_folder, scheme))
                 
-                # Lista de extensiones a probar
-                extensions = [".xlsx", ".XLSX", ".xls", ".XLS"]
+                temp_date += delta
 
-                for variant in variations:
-                    for ver in versions:
-                        for ext in extensions:
-                            # Llamar a get_xm_url pasando la variante, versión y extensión
-                            url, filename = download_xm_file.get_xm_url(variant, current_date, esquema_nombre=scheme, version_suffix=ver, extension=ext)
-                            
-                            try:
-                                self.txt_log.update_idletasks() # Refrescar UI
-                                
-                                # Llamada directa pasando la subcarpeta
-                                success = download_xm_file.download_file(url, filename, scheme_folder)
-                                
-                                if success:
-                                    self.log(f"[OK] Descargado: {filename}")
-                                    
-                                    # Post-procesamiento para TIE
-                                    if scheme == "TIE":
-                                        full_path = os.path.join(scheme_folder, filename)
-                                        # Llamar a la función de limpieza
-                                        new_path, error_msg = download_xm_file.clean_tie_file(full_path)
-                                        
-                                        if new_path:
-                                            new_filename = os.path.basename(new_path)
-                                            if new_filename != filename:
-                                                 self.log(f"[INFO] Convertido y Limpiado: {new_filename}")
-                                            else:
-                                                 self.log(f"[INFO] Archivo TIE Limpiado.")
-                                        else:
-                                            self.log(f"[WARN] No se pudo limpiar TIE: {error_msg}")
+            self.log(f"Generadas {len(tasks)} combinaciones posibles. Iniciando descarga concurrente...")
 
-                                    found_count += 1
-                                    # Si encontramos una versión/variante, no paramos, queremos todas
-                                
-                            except Exception as e:
-                                self.log(f"[ERROR] {str(e)}")
+            # Ejecutar con ThreadPoolExecutor
+            # Limitamos workers para no saturar
+            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+                # Map futures to tasks
+                future_to_task = {executor.submit(self.download_worker, *task): task for task in tasks}
 
-            current_date += delta
+                for future in concurrent.futures.as_completed(future_to_task):
+                    try:
+                        success, message = future.result()
+                        if success:
+                            found_count += 1
+                            if message:
+                                self.log(message)
+                        elif message and "[ERROR]" in message:
+                             self.log(message)
+                    except Exception as exc:
+                        self.log(f"[EXCEPTION] Worker generó excepción: {exc}")
+
+            self.log(f"\n--- Finalizado ---")
+            self.log(f"Días escaneados: {days_count}")
+            self.log(f"Archivos descargados: {found_count}")
             
-        self.log(f"\n--- Finalizado ---")
-        self.log(f"Días escaneados: {days_count}")
-        self.log(f"Archivos descargados: {found_count}")
-        
-        self.btn_run.config(state='normal')
-        messagebox.showinfo("Proceso Terminado", f"Se descargaron {found_count} archivos en '{scheme}'.")
+            self.msg_queue.put(("ENABLE_BTN", None))
+            self.msg_queue.put(("MSGBOX", ("Proceso Terminado", f"Se descargaron {found_count} archivos en '{scheme}'.")))
+
+        except Exception as e:
+            self.log(f"[CRITICAL ERROR] {e}")
+            self.msg_queue.put(("ENABLE_BTN", None))
+            self.msg_queue.put(("ERRORBOX", ("Error Crítico", str(e))))
 
 if __name__ == "__main__":
     app = XMDownloaderApp()
