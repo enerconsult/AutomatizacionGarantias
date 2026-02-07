@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 import threading
 import sys
 import os
+import queue
+import concurrent.futures
 
 # Importar lógica del script existente
 # Asegúrate de que download_xm_file.py esté en la misma carpeta
@@ -122,32 +124,47 @@ class XMDownloaderApp(tk.Tk):
         
         self.esquemas_data = download_xm_file.ESQUEMAS
         
+        # Cola para comunicación entre hilos
+        self.msg_queue = queue.Queue()
+        
         self.create_widgets()
         # Inicializar combo de esquemas
         self.cmb_scheme['values'] = list(self.esquemas_data.keys())
         self.cmb_scheme.current(0)
         self.on_scheme_change()
+        
+        # Iniciar polling de la cola
+        self.after(100, self.check_queue)
 
+    def check_queue(self):
+        """Revisa la cola de mensajes para actualizar la GUI desde el hilo principal."""
+        try:
+            while True:
+                msg_type, data = self.msg_queue.get_nowait()
+                
+                if msg_type == "LOG":
+                    self.txt_log.insert(tk.END, data + "\n")
+                    self.txt_log.see(tk.END)
+                elif msg_type == "ENABLE_BTN":
+                    self.btn_run.config(state='normal')
+                elif msg_type == "MSGBOX":
+                    title, msg = data
+                    messagebox.showinfo(title, msg)
+                elif msg_type == "ERRORBOX":
+                    title, msg = data
+                    messagebox.showerror(title, msg)
+                
+                self.msg_queue.task_done()
+        except queue.Empty:
+            pass
+        finally:
+            self.after(100, self.check_queue)
 
     def create_widgets(self):
         style = ttk.Style()
         style.configure("Bold.TLabel", font=("Arial", 10, "bold"))
         
-        self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # --- TAB 1: DESCARGAS ---
-        self.tab_downloads = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_downloads, text="Descargas")
-        self.create_download_widgets(self.tab_downloads)
-        
-        # --- TAB 2: VERIFICACIÓN ---
-        self.tab_verify = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_verify, text="Verificación & Reportes")
-        self.create_verification_widgets(self.tab_verify)
-
-    def create_download_widgets(self, parent):
-        main_frame = ttk.Frame(parent, padding="10")
+        main_frame = ttk.Frame(self, padding="20")
         main_frame.pack(fill='both', expand=True)
         
         # --- FECHAS ---
@@ -194,7 +211,7 @@ class XMDownloaderApp(tk.Tk):
         self.ent_folder.pack(side='left', fill='x', expand=True)
         self.ent_folder.insert(0, os.path.join(os.getcwd(), "Descargas_XM"))
         
-        ttk.Button(folder_frame, text="📂", width=3, command=lambda: self.select_folder(self.ent_folder)).pack(side='right', padx=5)
+        ttk.Button(folder_frame, text="📂", width=3, command=self.select_folder).pack(side='right', padx=5)
 
         #Info
         lbl_info = ttk.Label(main_frame, text="Nota: Se creará una subcarpeta con el nombre del esquema (ej: /Mensual)", 
@@ -216,62 +233,6 @@ class XMDownloaderApp(tk.Tk):
         scrollbar.pack(side='right', fill='y')
         self.txt_log.config(yscrollcommand=scrollbar.set)
 
-    def create_verification_widgets(self, parent):
-        v_frame = ttk.Frame(parent, padding="10")
-        v_frame.pack(fill='both', expand=True)
-        
-        # --- MAESTRO ---
-        maestro_frame = ttk.LabelFrame(v_frame, text="Archivo Maestro de Agentes", padding="10")
-        maestro_frame.pack(fill='x', pady=5)
-        
-        self.ent_maestro = ttk.Entry(maestro_frame)
-        self.ent_maestro.pack(side='left', fill='x', expand=True)
-        ttk.Button(maestro_frame, text="📂", width=3, 
-                   command=lambda: self.select_file(self.ent_maestro, [("Excel Files", "*.xlsx *.xls")])).pack(side='right', padx=5)
-        
-        # --- CONTROLES ---
-        ctrl_frame = ttk.Frame(v_frame)
-        ctrl_frame.pack(fill='x', pady=10)
-        
-        self.btn_verify = ttk.Button(ctrl_frame, text="EJECUTAR VERIFICACIÓN", command=self.start_verification_thread)
-        self.btn_verify.pack(side='left', fill='x', expand=True, padx=(0, 5))
-        
-        self.btn_export = ttk.Button(ctrl_frame, text="EXPORTAR REPORTE", command=self.export_report, state='disabled')
-        self.btn_export.pack(side='right', fill='x', expand=True, padx=(5, 0))
-        
-        # --- TABLA RESULTADOS ---
-        table_frame = ttk.LabelFrame(v_frame, text="Resultados", padding="5")
-        table_frame.pack(fill='both', expand=True)
-        
-        cols = ("Código", "Agente", "Esquema", "Deuda (Garantías)", "Saldo (Cuentas)", "Diferencia", "Estado")
-        self.tree = ttk.Treeview(table_frame, columns=cols, show='headings')
-        
-        for col in cols:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=100)
-        
-        self.tree.column("Agente", width=200) # Más ancho
-        self.tree.column("Esquema", width=80)
-        
-        v_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=v_scroll.set)
-        
-        self.tree.pack(side='left', fill='both', expand=True)
-        v_scroll.pack(side='right', fill='y')
-        
-        # Tags de color
-        self.tree.tag_configure('ok', background='#d4edda') # Verde
-        self.tree.tag_configure('warning', background='#fff3cd') # Amarillo
-        self.tree.tag_configure('danger', background='#f8d7da') # Rojo
-        self.tree.tag_configure('odd', background='#f9f9f9') # Gris claro
-
-    def select_file(self, entry_widget, filetypes):
-        f = filedialog.askopenfilename(filetypes=filetypes)
-        if f:
-            entry_widget.delete(0, tk.END)
-            entry_widget.insert(0, f)
-
-
     def on_scheme_change(self, event=None):
         scheme = self.cmb_scheme.get()
         if scheme in self.esquemas_data:
@@ -288,15 +249,15 @@ class XMDownloaderApp(tk.Tk):
             
         CalendarDialog(self, set_date)
 
-    def select_folder(self, entry_widget):
+    def select_folder(self):
         folder = filedialog.askdirectory()
         if folder:
-            entry_widget.delete(0, tk.END)
-            entry_widget.insert(0, folder)
+            self.ent_folder.delete(0, tk.END)
+            self.ent_folder.insert(0, folder)
 
     def log(self, message):
-        self.txt_log.insert(tk.END, message + "\n")
-        self.txt_log.see(tk.END)
+        """Envia el mensaje a la cola para ser procesado por el hilo principal."""
+        self.msg_queue.put(("LOG", message))
 
     def start_download_thread(self):
         self.btn_run.config(state='disabled')
@@ -320,204 +281,118 @@ class XMDownloaderApp(tk.Tk):
                          args=(start_date, end_date, scheme, selected_file, root_dir), 
                          daemon=True).start()
 
+    def download_worker(self, url, filename, scheme_folder, scheme):
+        """Helper function to run in a thread worker."""
+        try:
+            success = download_xm_file.download_file(url, filename, scheme_folder)
+            
+            if success:
+                msg = f"[OK] Descargado: {filename}"
+                # Post-procesamiento para TIE
+                if scheme == "TIE":
+                    full_path = os.path.join(scheme_folder, filename)
+                    # Llamar a la función de limpieza
+                    new_path, error_msg = download_xm_file.clean_tie_file(full_path)
+                    
+                    if new_path:
+                        new_filename = os.path.basename(new_path)
+                        if new_filename != filename:
+                             msg += f"\n[INFO] Convertido y Limpiado: {new_filename}"
+                        else:
+                             msg += "\n[INFO] Archivo TIE Limpiado."
+                    else:
+                        msg += f"\n[WARN] No se pudo limpiar TIE: {error_msg}"
+                return True, msg
+            return False, None
+        except Exception as e:
+            return False, f"[ERROR] {filename}: {str(e)}"
+
     def run_download_process(self, start_date, end_date, scheme, selected_file, root_dir):
-        current_date = start_date
-        delta = timedelta(days=1)
-        found_count = 0
-        days_count = 0
+        try:
+            current_date = start_date
+            delta = timedelta(days=1)
+            found_count = 0
+            days_count = 0
 
-        # Crear subcarpeta del esquema
-        scheme_folder = os.path.join(root_dir, scheme)
-        if not os.path.exists(scheme_folder):
-            try:
-                os.makedirs(scheme_folder)
-                self.log(f"Creada carpeta: {scheme_folder}")
-            except OSError as e:
-                self.log(f"[ERROR] No se pudo crear carpeta: {e}")
-                self.btn_run.config(state='normal')
-                return
+            # Crear subcarpeta del esquema
+            scheme_folder = os.path.join(root_dir, scheme)
+            if not os.path.exists(scheme_folder):
+                try:
+                    os.makedirs(scheme_folder)
+                    self.log(f"Creada carpeta: {scheme_folder}")
+                except OSError as e:
+                    self.log(f"[ERROR] No se pudo crear carpeta: {e}")
+                    self.msg_queue.put(("ENABLE_BTN", None))
+                    return
 
-        # Determinar lista de archivos a probar
-        files_to_try = []
-        if selected_file.startswith("--- TODOS"):
-            files_to_try = self.esquemas_data[scheme]["archivos"]
-            self.log(f"Modo: Escaneando TODOS los archivos del esquema '{scheme}'...")
-        else:
-            files_to_try = [selected_file]
-            self.log(f"Modo: Buscando solo '{selected_file}'...")
-
-        self.log(f"Guardando en: {scheme_folder}")
-
-        # Versiones a probar
-        versions = ["", "_V2"]
-
-        while current_date <= end_date:
-            days_count += 1
-            # date_str = current_date.strftime("%Y-%m-%d")
-            
-            for file_base in files_to_try:
-                # Generar variaciones de nombre para robustez (espacios extra, etc.)
-                variations = [
-                    file_base,                     # Normal: "GARANTIA SEMANAL" -> "GARANTIA SEMANAL 23ENE..."
-                    file_base + " ",               # Doble espacio antes de fecha: "GARANTIA SEMANAL  23ENE..."
-                    file_base.replace(" ", "  ")   # Doble espacio interno: "GARANTIA  SEMANAL 23ENE..."
-                ]
-                
-                # Eliminar duplicados si no hay espacios internos
-                variations = list(set(variations))
-                
-                # Lista de extensiones a probar
-                extensions = [".xlsx", ".XLSX", ".xls", ".XLS"]
-
-                for variant in variations:
-                    for ver in versions:
-                        for ext in extensions:
-                            # Llamar a get_xm_url pasando la variante, versión y extensión
-                            url, filename = download_xm_file.get_xm_url(variant, current_date, esquema_nombre=scheme, version_suffix=ver, extension=ext)
-                            
-                            try:
-                                self.txt_log.update_idletasks() # Refrescar UI
-                                
-                                # Llamada directa pasando la subcarpeta
-                                success = download_xm_file.download_file(url, filename, scheme_folder)
-                                
-                                if success:
-                                    self.log(f"[OK] Descargado: {filename}")
-                                    
-                                    # Post-procesamiento para TIE
-                                    if scheme == "TIE":
-                                        full_path = os.path.join(scheme_folder, filename)
-                                        # Llamar a la función de limpieza
-                                        new_path, error_msg = download_xm_file.clean_tie_file(full_path)
-                                        
-                                        if new_path:
-                                            new_filename = os.path.basename(new_path)
-                                            if new_filename != filename:
-                                                 self.log(f"[INFO] Convertido y Limpiado: {new_filename}")
-                                            else:
-                                                 self.log(f"[INFO] Archivo TIE Limpiado.")
-                                        else:
-                                            self.log(f"[WARN] No se pudo limpiar TIE: {error_msg}")
-
-                                    found_count += 1
-                                    # Si encontramos una versión/variante, no paramos, queremos todas
-                                
-                            except Exception as e:
-                                self.log(f"[ERROR] {str(e)}")
-
-            current_date += delta
-            
-        self.log(f"\n--- Finalizado ---")
-        self.log(f"Días escaneados: {days_count}")
-        self.log(f"Archivos descargados: {found_count}")
-        
-        self.btn_run.config(state='normal')
-        messagebox.showinfo("Proceso Terminado", f"Se descargaron {found_count} archivos en '{scheme}'.")
-
-    # --- LÓGICA VERIFICACIÓN ---
-    def start_verification_thread(self):
-        maestro_path = self.ent_maestro.get()
-        if not maestro_path or not os.path.exists(maestro_path):
-            messagebox.showerror("Error", "Seleccione un archivo Maestro válido.")
-            return
-
-        root_dir = self.ent_folder.get()
-        if not os.path.exists(root_dir):
-            messagebox.showerror("Error", "La carpeta de descargas no existe.")
-            return
-
-        self.btn_verify.config(state='disabled')
-        self.tree.delete(*self.tree.get_children()) # Limpiar tabla
-        
-        threading.Thread(target=self.run_verification_process, 
-                         args=(maestro_path, root_dir), 
-                         daemon=True).start()
-
-    def run_verification_process(self, maestro_path, root_dir):
-        # 1. Leer Maestro
-        agentes, err = download_xm_file.read_maestro_file(maestro_path)
-        if err:
-            messagebox.showerror("Error Maestro", err)
-            self.btn_verify.config(state='normal')
-            return
-
-        # 2. Leer Saldos (Cuentas) - Solo una vez
-        saldos, err_saldos, file_saldos = download_xm_file.get_latest_balance_file(root_dir)
-        if err_saldos:
-            # No es crítico fatal, pero avisa
-            print(f"Warn: {err_saldos}")
-        
-        self.results_data = [] # Para exportar
-
-        for agente in agentes:
-            # 3. Calcular Deuda
-            deuda, detalles = download_xm_file.calculate_debt_for_agent(root_dir, agente)
-            
-            # 4. Obtener Saldo
-            saldo = saldos.get(agente["cuenta"], 0.0)
-            
-            # 5. Análisis
-            diferencia = saldo - deuda
-            
-            estado = "OK"
-            tag = "ok"
-            
-            if deuda > 0:
-                if diferencia < 0:
-                    estado = "Fondeo Req."
-                    tag = "danger"
-                elif diferencia < (deuda * 0.1): # Warning si queda poco margen (ej: 10%)
-                    estado = "Margen Bajo"
-                    tag = "warning"
+            # Determinar lista de archivos a probar
+            files_to_try = []
+            if selected_file.startswith("--- TODOS"):
+                files_to_try = self.esquemas_data[scheme]["archivos"]
+                self.log(f"Modo: Escaneando TODOS los archivos del esquema '{scheme}'...")
             else:
-                if saldo > 0:
-                    estado = "A Favor"
-                else:
-                    estado = "Inactivo"
-                    tag = "odd"
+                files_to_try = [selected_file]
+                self.log(f"Modo: Buscando solo '{selected_file}'...")
 
-            # Insertar en Treeview
-            vals = (
-                agente["codigo"],
-                agente["nombre"],
-                agente["esquema"],
-                f"${deuda:,.2f}",
-                f"${saldo:,.2f}",
-                f"${diferencia:,.2f}",
-                estado
-            )
-            self.tree.insert('', 'end', values=vals, tags=(tag,))
+            self.log(f"Guardando en: {scheme_folder}")
+
+            # Generar todas las tareas
+            tasks = []
+            versions = ["", "_V2"]
+            extensions = [".xlsx", ".XLSX", ".xls", ".XLS"]
+
+            # Loop dates
+            temp_date = start_date
+            while temp_date <= end_date:
+                days_count += 1
+                
+                for file_base in files_to_try:
+                    variations = [
+                        file_base,                     
+                        file_base + " ",               
+                        file_base.replace(" ", "  ")   
+                    ]
+                    variations = list(set(variations))
+                    
+                    for variant in variations:
+                        for ver in versions:
+                            for ext in extensions:
+                                url, filename = download_xm_file.get_xm_url(variant, temp_date, esquema_nombre=scheme, version_suffix=ver, extension=ext)
+                                tasks.append((url, filename, scheme_folder, scheme))
+                
+                temp_date += delta
+
+            self.log(f"Generadas {len(tasks)} combinaciones posibles. Iniciando descarga concurrente...")
             
-            # Guardar data raw para export
-            self.results_data.append({
-                "Código": agente["codigo"],
-                "Agente": agente["nombre"],
-                "Esquema": agente["esquema"],
-                "Cuenta": agente["cuenta"],
-                "Deuda Total": deuda,
-                "Saldo Cuenta": saldo,
-                "Diferencia": diferencia,
-                "Estado": estado,
-                "Detalle Deuda": "; ".join(detalles)
-            })
+            # Ejecutar con ThreadPoolExecutor
+            # Limitamos workers para no saturar
+            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+                # Map futures to tasks
+                future_to_task = {executor.submit(self.download_worker, *task): task for task in tasks}
+                
+                for future in concurrent.futures.as_completed(future_to_task):
+                    try:
+                        success, message = future.result()
+                        if success:
+                            found_count += 1
+                            if message:
+                                self.log(message)
+                        elif message and "[ERROR]" in message:
+                             self.log(message)
+                    except Exception as exc:
+                        self.log(f"[EXCEPTION] Worker generó excepción: {exc}")
 
-        self.btn_verify.config(state='normal')
-        self.btn_export.config(state='normal')
-        messagebox.showinfo("Verificación", "Proceso completado.")
-
-    def export_report(self):
-        if not hasattr(self, 'results_data') or not self.results_data:
-            return
+            self.log(f"\n--- Finalizado ---")
+            self.log(f"Días escaneados: {days_count}")
+            self.log(f"Archivos descargados: {found_count}")
             
-        f = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel Files", "*.xlsx")])
-        if f:
-            try:
-                import pandas as pd
-                df = pd.DataFrame(self.results_data)
-                df.to_excel(f, index=False)
-                messagebox.showinfo("Exportar", f"Reporte guardado en:\n{f}")
-            except Exception as e:
-                messagebox.showerror("Error", f"No se pudo guardar:\n{str(e)}")
+            self.msg_queue.put(("ENABLE_BTN", None))
+            self.msg_queue.put(("MSGBOX", ("Proceso Terminado", f"Se descargaron {found_count} archivos en '{scheme}'.")))
+
+        except Exception as e:
+            self.log(f"[CRITICAL ERROR] {e}")
+            self.msg_queue.put(("ENABLE_BTN", None))
+            self.msg_queue.put(("ERRORBOX", ("Error Crítico", str(e))))
 
 if __name__ == "__main__":
     app = XMDownloaderApp()

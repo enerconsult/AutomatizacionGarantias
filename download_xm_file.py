@@ -3,14 +3,23 @@ import os
 from datetime import datetime, timedelta
 import calendar
 import locale
+from requests.adapters import HTTPAdapter
+
 try:
     import pandas as pd
 except ImportError:
     pd = None
     print("Advertencia: pandas no está instalado. No se podrá procesar archivos TIE.")
 
-# ... (resto de imports y constantes igual)
+# Configuración de Sesión Global para reutilización de conexiones
+session = requests.Session()
+# Ajustamos pool_maxsize para coincidir con los workers del ThreadPoolExecutor (20)
+adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20)
+session.mount('https://', adapter)
+session.mount('http://', adapter)
 
+
+import concurrent.futures
 
 try:
     locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
@@ -148,11 +157,12 @@ def download_file(url, filename, save_dir="Descargas_XM"):
         
     save_path = os.path.join(save_dir, filename)
     
-    print(f"Descargando: {filename}...")
-    print(f"URL: {url}")
+    # print(f"Descargando: {filename}...") # Comentado para evitar spam en hilos
+    # print(f"URL: {url}")
     
     try:
-        response = requests.get(url, stream=True)
+        # Usamos la sesión global
+        response = session.get(url, stream=True, timeout=30)
         response.raise_for_status() # Lanza error si es 404, 403, etc.
         
         with open(save_path, 'wb') as f:
@@ -160,11 +170,11 @@ def download_file(url, filename, save_dir="Descargas_XM"):
                 f.write(chunk)
         print(f"¡Éxito! Guardado en: {save_path}")
         return True
-    except requests.exceptions.HTTPError as err:
-        print(f"Error HTTP: {err}")
+    except requests.exceptions.HTTPError:
+        # No imprimimos error 404 para no saturar consola en brute-force
         return False
     except Exception as e:
-        print(f"Error general: {e}")
+        print(f"Error general en {filename}: {e}")
         return False
 
 def clean_tie_file(filepath):
@@ -455,6 +465,95 @@ def _extract_date_from_name(filename):
         return None
     return None
 
+    return None 
+
+def download_scheme_range(start_date, end_date, scheme_name, root_dir, max_workers=20, callback_log=None):
+    """
+    Descarga archivos para un esquema en un rango de fechas.
+    callback_log: Función opcional para recibir mensajes de log (str).
+    Retorna: (archivos_descargados, total_dias)
+    """
+    if scheme_name not in ESQUEMAS:
+        if callback_log: callback_log(f"[ERROR] Esquema '{scheme_name}' no existe.")
+        return 0, 0
+        
+    config = ESQUEMAS[scheme_name]
+    files_to_try = config["archivos"]
+    
+    # Crear carpeta
+    scheme_folder = os.path.join(root_dir, scheme_name)
+    if not os.path.exists(scheme_folder):
+        try:
+            os.makedirs(scheme_folder)
+            if callback_log: callback_log(f"Creada carpeta: {scheme_folder}")
+        except OSError as e:
+            if callback_log: callback_log(f"[ERROR] No se pudo crear carpeta: {e}")
+            return 0, 0
+            
+    if callback_log: callback_log(f"--- Iniciando Descarga Automática: {scheme_name} ---")
+    if callback_log: callback_log(f"Rango: {start_date.strftime('%Y-%m-%d')} a {end_date.strftime('%Y-%m-%d')}")
+    
+    tasks = []
+    versions = ["", "_V2"]
+    extensions = [".xlsx", ".XLSX", ".xls", ".XLS"]
+    
+    current_date = start_date
+    delta = timedelta(days=1)
+    days_count = 0
+    
+    while current_date <= end_date:
+        days_count += 1
+        for file_base in files_to_try:
+            variations = [file_base, file_base + " ", file_base.replace(" ", "  ")]
+            variations = list(set(variations))
+            
+            for variant in variations:
+                for ver in versions:
+                    for ext in extensions:
+                        url, filename = get_xm_url(variant, current_date, esquema_nombre=scheme_name, version_suffix=ver, extension=ext)
+                        tasks.append((url, filename, scheme_folder, scheme_name))
+        current_date += delta
+        
+    found_count = 0
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_task = {executor.submit(_download_worker_wrapper, *task): task for task in tasks}
+        
+        for future in concurrent.futures.as_completed(future_to_task):
+            try:
+                success, msg = future.result()
+                if success:
+                    found_count += 1
+                    if callback_log and msg: callback_log(msg)
+                elif msg and "[ERROR]" in msg and callback_log:
+                     callback_log(msg)
+            except Exception as e:
+                if callback_log: callback_log(f"[EXCEPTION] {e}")
+                
+    if callback_log: callback_log(f"Finalizado {scheme_name}: {found_count} archivos.")
+    return found_count, days_count
+
+def _download_worker_wrapper(url, filename, scheme_folder, scheme):
+    """Helper interno para procesar descarga y limpieza (logic from GUI)"""
+    try:
+        success = download_file(url, filename, scheme_folder)
+        if success:
+            msg = f"[OK] Descargado: {filename}"
+            if scheme == "TIE":
+                full_path = os.path.join(scheme_folder, filename)
+                new_path, error_msg = clean_tie_file(full_path)
+                if new_path:
+                    new_filename = os.path.basename(new_path)
+                    if new_filename != filename:
+                         msg += f" -> Limpiado: {new_filename}"
+                    else:
+                         msg += " -> Limpiado."
+                else:
+                    msg += f" -> [WARN] Error Limpiando TIE: {error_msg}"
+            return True, msg
+        return False, None
+    except Exception as e:
+        return False, f"[ERROR] {filename}: {str(e)}"
+
 if __name__ == "__main__":
     pass
-
