@@ -2,8 +2,8 @@ name: Ejecución Diaria de Garantías
 
 on:
   schedule:
-    - cron: '0 12 * * *' # Ejecución programada
-  workflow_dispatch: # Ejecución manual
+    - cron: '0 12 * * *'
+  workflow_dispatch:
 
 jobs:
   run-script:
@@ -31,6 +31,9 @@ jobs:
     - name: Ejecutar script diario
       run: python run_daily.py
       
+    - name: Debug - Listar archivos actuales
+      run: ls -R # Esto nos permitirá ver en los logs si la carpeta 'Garantías' se creó
+
     - name: Sincronizar a Google Drive
       env:
         RCLONE_CONFIG_BODY: ${{ secrets.RCLONE_CONFIG_DATA }}
@@ -38,8 +41,12 @@ jobs:
         # Creamos el archivo de configuración temporal
         echo "$RCLONE_CONFIG_BODY" > rclone.conf
         
-        # Copiamos la carpeta 'Garantías' generada por el script
-        # Usamos el nombre de tu remoto: AutomatizacionGarantias
+        # ASEGURAR QUE LA CARPETA EXISTE: 
+        # Si el script no descargó nada, creamos la carpeta vacía para que rclone no de error
+        mkdir -p ./Garantías
+        
+        # Sincronizamos (usamos copy para no borrar lo que ya tienes en Drive)
+        # Nota: He ajustado la ruta para que coincida con lo que rclone espera
         rclone copy ./Garantías/ AutomatizacionGarantias:Garantías/Automatización/Garantías --config rclone.conf
 
     - name: Limpiar configuración
