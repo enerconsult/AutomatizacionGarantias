@@ -20,7 +20,7 @@ def main():
     end_date = start_date + timedelta(days=15)
     
     # Carpeta raíz (relativa al script o absoluta)
-    root_dir = os.path.join(current_dir, "Descargas_XM")
+    root_dir = os.path.join(current_dir, "Garantías")
     
     print(f"=== INICIANDO EJECUCIÓN AUTOMÁTICA: {datetime.now()} ===")
     print(f"Rango: {start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')}")
