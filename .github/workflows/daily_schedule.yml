@@ -1,11 +1,9 @@
-
 name: Ejecución Diaria de Garantías
 
 on:
   schedule:
-    # Ejecutar todos los días a las 13:00 UTC (8:00 AM Colombia aprox)
-    - cron: '0 13 * * *'
-  workflow_dispatch: # Permite ejecución manual desde GitHub
+    - cron: '0 12 * * *'
+  workflow_dispatch:
 
 jobs:
   run-script:
@@ -19,7 +17,10 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
-        
+
+    - name: Instalar rclone
+      uses: rclone/github-action@v1
+
     - name: Instalar dependencias
       run: |
         python -m pip install --upgrade pip
@@ -28,9 +29,16 @@ jobs:
     - name: Ejecutar script diario
       run: python run_daily.py
       
-    - name: Subir resultados como artefacto
-      uses: actions/upload-artifact@v4
-      with:
-        name: Descargas_XM_Resultados
-        path: Descargas_XM/
-        retention-days: 5
+    - name: Sincronizar resultados a Google Drive
+      env:
+        RCLONE_CONFIG_BODY: ${{ secrets.RCLONE_CONFIG_DATA }}
+      run: |
+        # Crear archivo de configuración temporal
+        echo "$RCLONE_CONFIG_BODY" > rclone.conf
+        
+        # Sincroniza la carpeta local 'Garantías' con la carpeta en Drive
+        # Se usa 'copy' en lugar de 'sync' para evitar borrar archivos viejos en Drive
+        rclone copy ./Garantías/ AutomatizacionGarantias:Garantías/Automatización/Garantías --config rclone.conf
+
+    - name: Limpiar configuración
+      run: rm rclone.conf
