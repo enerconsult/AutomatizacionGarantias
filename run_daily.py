@@ -16,8 +16,10 @@ except ImportError:
 
 def main():
     # Configuración de fechas
-    start_date = datetime.now()
-    end_date = start_date + timedelta(days=15)
+    # Se incluye un buffer de 2 días hacia atrás para asegurar descargas de días previos
+    # (ej: Cuentas/Saldos de días anteriores o fines de semana)
+    start_date = datetime.now() - timedelta(days=2)
+    end_date = datetime.now() + timedelta(days=15)
     
     # Carpeta raíz (relativa al script o absoluta)
     root_dir = os.path.join(current_dir, "Garantías")
