@@ -18,36 +18,29 @@ jobs:
       with:
         python-version: '3.9'
 
-    - name: Instalar rclone
-      run: |
-        sudo apt-get update
-        sudo apt-get install rclone -y
+    # Eliminamos el paso de "Instalar rclone" ya que no se usa
 
     - name: Instalar dependencias
       run: |
         python -m pip install --upgrade pip
+        # Aseguramos que se instalen las nuevas librerías de Google
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
         
     - name: Ejecutar script diario
       run: python run_daily.py
       
     - name: Debug - Listar archivos actuales
-      run: ls -R # Esto nos permitirá ver en los logs si la carpeta 'Garantías' se creó
+      run: ls -R
 
-    - name: Sincronizar a Google Drive
+    # Nuevo paso: Subida con Python y Service Account
+    - name: Sincronizar a Google Drive (Service Account)
       env:
-        RCLONE_CONFIG_BODY: ${{ secrets.RCLONE_CONFIG_DATA }}
+        # Usamos los nuevos secretos que creaste
+        GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
+        GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        # Apuntamos a la carpeta que genera tu script
+        LOCAL_UPLOAD_PATH: "./Garantías" 
       run: |
-        # Creamos el archivo de configuración temporal
-        echo "$RCLONE_CONFIG_BODY" > rclone.conf
-        
-        # ASEGURAR QUE LA CARPETA EXISTE: 
-        # Si el script no descargó nada, creamos la carpeta vacía para que rclone no de error
+        # Crear carpeta por si acaso no existe (evita error en el script)
         mkdir -p ./Garantías
-        
-        # Sincronizamos (usamos copy para no borrar lo que ya tienes en Drive)
-        # Nota: He ajustado la ruta para que coincida con lo que rclone espera
-        rclone copy ./Garantías/ AutomatizacionGarantias:Garantías/Automatización/Garantías --config rclone.conf
-
-    - name: Limpiar configuración
-      run: rm rclone.conf
+        python upload_drive.py
