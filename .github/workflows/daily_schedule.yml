@@ -33,14 +33,11 @@ jobs:
       run: ls -R
 
     # Nuevo paso: Subida con Python y Service Account
-    - name: Sincronizar a Google Drive (Service Account)
+    - name: Sincronizar a Google Drive (User OAuth)
       env:
-        # Usamos los nuevos secretos que creaste
-        GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
+        GDRIVE_TOKEN_JSON: ${{ secrets.GDRIVE_TOKEN_JSON }} # <--- CAMBIO AQUÍ
         GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-        # Apuntamos a la carpeta que genera tu script
-        LOCAL_UPLOAD_PATH: "./Garantías" 
+        LOCAL_UPLOAD_PATH: "./Garantías"
       run: |
-        # Crear carpeta por si acaso no existe (evita error en el script)
         mkdir -p ./Garantías
         python upload_drive.py
