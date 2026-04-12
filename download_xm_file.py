@@ -14,14 +14,25 @@ except ImportError:
     pd = None
     print("Advertencia: pandas no está instalado. No se podrá procesar archivos TIE.")
 
-# curl maneja TLS correctamente en el servidor XM (Azure).
-# En Linux/GitHub Actions usamos curl directamente.
-# En Windows (ejecución local) usamos urllib3 con requests como fallback.
-_CURL = shutil.which('curl')
+# El servidor XM rechaza TLS 1.2 con EOF desde ~10 abril.
+# Solución: forzar TLS 1.3 mínimo en urllib3 usando ssl_minimum_version
+# (parámetro nativo de urllib3 v2.x, más confiable que pasar ssl_context).
+import platform
+_CURL = shutil.which('curl') if platform.system() != 'Windows' else None
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-_session = requests.Session()
-_session.verify = False
+
+# Pool con TLS 1.3 mínimo para conexiones locales (Windows) vía requests
+_https_pool = urllib3.PoolManager(
+    num_pools=20,
+    maxsize=20,
+    ssl_minimum_version=ssl.TLSVersion.TLSv1_3,
+    cert_reqs='CERT_NONE',
+    headers={
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Referer': 'https://app-portalxmcore01.azurewebsites.net/',
+    }
+)
 
 
 import concurrent.futures
@@ -183,19 +194,26 @@ def download_file(url, filename, save_dir="Descargas_XM"):
             print(f"Error general en {filename}: {e}")
             return False
     else:
-        # Windows / ejecución local: usar requests
+        # Windows / ejecución local: usar urllib3 con TLS 1.3 mínimo
         try:
-            response = _session.get(url, stream=True, timeout=30)
-            response.raise_for_status()
-            with open(save_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            print(f"¡Éxito! Guardado en: {save_path}")
-            return True
-        except requests.exceptions.HTTPError:
+            resp = _https_pool.request('GET', url, preload_content=False, timeout=30)
+            if resp.status == 200:
+                with open(save_path, 'wb') as f:
+                    for chunk in resp.stream(8192):
+                        f.write(chunk)
+                resp.release_conn()
+                print(f"¡Éxito! Guardado en: {save_path}")
+                return True
+            resp.release_conn()
+            if resp.status != 404:
+                print(f"[HTTP {resp.status}] {filename}")
+            if os.path.exists(save_path):
+                os.remove(save_path)
             return False
         except Exception as e:
             print(f"Error general en {filename}: {e}")
+            if os.path.exists(save_path):
+                os.remove(save_path)
             return False
 
 def clean_tie_file(filepath):
