@@ -180,15 +180,23 @@ def download_file(url, filename, save_dir="Descargas_XM"):
             print(f"¡Éxito! Guardado en: {save_path}")
             return True
         resp.release_conn()
-        if resp.status not in (404, 500):  # 404/500 = archivo no existe, no loguear
+        # 404 = archivo no existe (normal en brute-force)
+        # 500 = el nuevo API devuelve 500 cuando el blob no existe (en vez de 404)
+        if resp.status not in (404, 500):
             print(f"[HTTP {resp.status}] {filename}")
-        if os.path.exists(save_path):
-            os.remove(save_path)
+        try:
+            if os.path.exists(save_path):
+                os.remove(save_path)
+        except OSError:
+            pass  # En Windows, otro hilo puede tener el archivo abierto (mismo path case-insensitive)
         return False
     except Exception as e:
         print(f"Error general en {filename}: {e}")
-        if os.path.exists(save_path):
-            os.remove(save_path)
+        try:
+            if os.path.exists(save_path):
+                os.remove(save_path)
+        except OSError:
+            pass
         return False
 
 def clean_tie_file(filepath):
