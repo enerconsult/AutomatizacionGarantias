@@ -1,10 +1,10 @@
 import requests
-import os
+import urllib3
 import ssl
+import os
 from datetime import datetime, timedelta
 import calendar
 import locale
-from requests.adapters import HTTPAdapter
 
 try:
     import pandas as pd
@@ -12,23 +12,21 @@ except ImportError:
     pd = None
     print("Advertencia: pandas no está instalado. No se podrá procesar archivos TIE.")
 
-# El servidor app-portalxmcore01.azurewebsites.net SOLO acepta TLS 1.3.
-# Con TLS 1.2 cierra la conexión inmediatamente con EOF.
-# Este adaptador fuerza TLS 1.3 como versión mínima.
-class _TLS13Adapter(HTTPAdapter):
-    def init_poolmanager(self, *args, **kwargs):
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.minimum_version = ssl.TLSVersion.TLSv1_3
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        kwargs['ssl_context'] = ctx
-        super().init_poolmanager(*args, **kwargs)
+# El servidor XM (Azure) tiene instancias que rechazan TLS 1.2 con EOF.
+# Usamos urllib3 directamente (sin requests) para control total del contexto SSL.
+# Así evitamos que urllib3/requests sobreescriba la configuración TLS internamente.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Configuración de Sesión Global para reutilización de conexiones
-session = requests.Session()
-adapter = _TLS13Adapter(pool_connections=20, pool_maxsize=20)
-session.mount('https://', adapter)
-session.mount('http://', adapter)
+_ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+_ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+_ssl_ctx.check_hostname = False
+_ssl_ctx.verify_mode = ssl.CERT_NONE
+
+_pool = urllib3.PoolManager(
+    num_pools=20,
+    maxsize=20,
+    ssl_context=_ssl_ctx,
+)
 
 
 import concurrent.futures
@@ -166,25 +164,24 @@ def get_xm_url(filename_base, date_obj, esquema_nombre="Mensual", version_suffix
 def download_file(url, filename, save_dir="Descargas_XM"):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-        
+
     save_path = os.path.join(save_dir, filename)
-    
-    # print(f"Descargando: {filename}...") # Comentado para evitar spam en hilos
-    # print(f"URL: {url}")
-    
+
     try:
-        # Usamos la sesión global
-        response = session.get(url, stream=True, timeout=30)
-        response.raise_for_status() # Lanza error si es 404, 403, etc.
-        
-        with open(save_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        print(f"¡Éxito! Guardado en: {save_path}")
-        return True
-    except requests.exceptions.HTTPError:
-        # No imprimimos error 404 para no saturar consola en brute-force
-        return False
+        response = _pool.request(
+            'GET', url,
+            preload_content=False,
+            timeout=urllib3.Timeout(connect=10, read=30)
+        )
+        if response.status == 200:
+            with open(save_path, 'wb') as f:
+                for chunk in response.stream(8192):
+                    f.write(chunk)
+            response.release_conn()
+            print(f"¡Éxito! Guardado en: {save_path}")
+            return True
+        response.release_conn()
+        return False  # 404, 403, etc. — archivo no encontrado o sin acceso
     except Exception as e:
         print(f"Error general en {filename}: {e}")
         return False
