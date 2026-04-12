@@ -2,6 +2,8 @@ import requests
 import urllib3
 import ssl
 import os
+import subprocess
+import shutil
 from datetime import datetime, timedelta
 import calendar
 import locale
@@ -12,21 +14,14 @@ except ImportError:
     pd = None
     print("Advertencia: pandas no está instalado. No se podrá procesar archivos TIE.")
 
-# El servidor XM (Azure) tiene instancias que rechazan TLS 1.2 con EOF.
-# Usamos urllib3 directamente (sin requests) para control total del contexto SSL.
-# Así evitamos que urllib3/requests sobreescriba la configuración TLS internamente.
+# curl maneja TLS correctamente en el servidor XM (Azure).
+# En Linux/GitHub Actions usamos curl directamente.
+# En Windows (ejecución local) usamos urllib3 con requests como fallback.
+_CURL = shutil.which('curl')
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-_ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-_ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_3
-_ssl_ctx.check_hostname = False
-_ssl_ctx.verify_mode = ssl.CERT_NONE
-
-_pool = urllib3.PoolManager(
-    num_pools=20,
-    maxsize=20,
-    ssl_context=_ssl_ctx,
-)
+_session = requests.Session()
+_session.verify = False
 
 
 import concurrent.futures
@@ -167,24 +162,38 @@ def download_file(url, filename, save_dir="Descargas_XM"):
 
     save_path = os.path.join(save_dir, filename)
 
-    try:
-        response = _pool.request(
-            'GET', url,
-            preload_content=False,
-            timeout=urllib3.Timeout(connect=10, read=30)
-        )
-        if response.status == 200:
+    if _CURL:
+        # Linux / GitHub Actions: curl negocia TLS correctamente con el servidor XM
+        try:
+            result = subprocess.run(
+                [_CURL, '-s', '-f', '-o', save_path, '--max-time', '30', url],
+                capture_output=True, timeout=45
+            )
+            if result.returncode == 0:
+                print(f"¡Éxito! Guardado en: {save_path}")
+                return True
+            # Código 22 = HTTP 4xx/5xx (archivo no existe), otros = error de red
+            if os.path.exists(save_path):
+                os.remove(save_path)
+            return False
+        except Exception as e:
+            print(f"Error general en {filename}: {e}")
+            return False
+    else:
+        # Windows / ejecución local: usar requests
+        try:
+            response = _session.get(url, stream=True, timeout=30)
+            response.raise_for_status()
             with open(save_path, 'wb') as f:
-                for chunk in response.stream(8192):
+                for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
-            response.release_conn()
             print(f"¡Éxito! Guardado en: {save_path}")
             return True
-        response.release_conn()
-        return False  # 404, 403, etc. — archivo no encontrado o sin acceso
-    except Exception as e:
-        print(f"Error general en {filename}: {e}")
-        return False
+        except requests.exceptions.HTTPError:
+            return False
+        except Exception as e:
+            print(f"Error general en {filename}: {e}")
+            return False
 
 def clean_tie_file(filepath):
     """
