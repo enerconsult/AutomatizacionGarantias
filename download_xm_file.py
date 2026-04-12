@@ -166,13 +166,16 @@ def download_file(url, filename, save_dir="Descargas_XM"):
         # Linux / GitHub Actions: curl negocia TLS correctamente con el servidor XM
         try:
             result = subprocess.run(
-                [_CURL, '-s', '-f', '-o', save_path, '--max-time', '30', url],
-                capture_output=True, timeout=45
+                [_CURL, '-s', '-o', save_path, '-w', '%{http_code}', '--max-time', '30', url],
+                capture_output=True, timeout=45, text=True
             )
-            if result.returncode == 0:
+            http_code = result.stdout.strip()
+            if http_code == '200':
                 print(f"¡Éxito! Guardado en: {save_path}")
                 return True
-            # Código 22 = HTTP 4xx/5xx (archivo no existe), otros = error de red
+            # Loguear cualquier respuesta que NO sea 404 (404 es normal para brute-force)
+            if http_code != '404':
+                print(f"[HTTP {http_code}] {filename}")
             if os.path.exists(save_path):
                 os.remove(save_path)
             return False
