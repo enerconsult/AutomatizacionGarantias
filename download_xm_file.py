@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 import calendar
 import locale
 from requests.adapters import HTTPAdapter
-from urllib3.util.ssl_ import create_urllib3_context
 
 try:
     import pandas as pd
@@ -13,23 +12,21 @@ except ImportError:
     pd = None
     print("Advertencia: pandas no está instalado. No se podrá procesar archivos TIE.")
 
-# Adaptador SSL tolerante a servidores que no cierran correctamente la conexión TLS.
-# Soluciona el error UNEXPECTED_EOF_WHILE_READING de OpenSSL 3.x (Python 3.10+).
-class _TolerantSSLAdapter(HTTPAdapter):
+# El servidor app-portalxmcore01.azurewebsites.net SOLO acepta TLS 1.3.
+# Con TLS 1.2 cierra la conexión inmediatamente con EOF.
+# Este adaptador fuerza TLS 1.3 como versión mínima.
+class _TLS13Adapter(HTTPAdapter):
     def init_poolmanager(self, *args, **kwargs):
-        ctx = create_urllib3_context()
-        # SSL_OP_IGNORE_UNEXPECTED_EOF: disponible como constante en Python 3.12+,
-        # pero el valor numérico (0x80) funciona en cualquier versión con OpenSSL 3.x
-        try:
-            ctx.options |= ssl.OP_IGNORE_UNEXPECTED_EOF
-        except AttributeError:
-            ctx.options |= 0x80  # valor directo de SSL_OP_IGNORE_UNEXPECTED_EOF
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
         kwargs['ssl_context'] = ctx
         super().init_poolmanager(*args, **kwargs)
 
 # Configuración de Sesión Global para reutilización de conexiones
 session = requests.Session()
-adapter = _TolerantSSLAdapter(pool_connections=20, pool_maxsize=20)
+adapter = _TLS13Adapter(pool_connections=20, pool_maxsize=20)
 session.mount('https://', adapter)
 session.mount('http://', adapter)
 
