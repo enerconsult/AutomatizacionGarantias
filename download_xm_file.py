@@ -1,12 +1,9 @@
 import requests
 import os
-import time
 from datetime import datetime, timedelta
 import calendar
 import locale
-import ssl
 from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 try:
     import pandas as pd
@@ -14,24 +11,12 @@ except ImportError:
     pd = None
     print("Advertencia: pandas no está instalado. No se podrá procesar archivos TIE.")
 
-# Configuración de Sesión Global con reintentos automáticos ante errores SSL/conexión
+# Configuración de Sesión Global para reutilización de conexiones
 session = requests.Session()
-retry_strategy = Retry(
-    total=3,
-    backoff_factor=2,          # espera 2s, 4s, 8s entre reintentos
-    status_forcelist=[429, 500, 502, 503, 504],
-    allowed_methods=["GET"],
-)
-adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=5, pool_maxsize=5)
+# Ajustamos pool_maxsize para coincidir con los workers del ThreadPoolExecutor (20)
+adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20)
 session.mount('https://', adapter)
 session.mount('http://', adapter)
-
-# Headers para parecer un navegador y evitar bloqueos por User-Agent
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/octet-stream, */*',
-    'Accept-Language': 'es-CO,es;q=0.9',
-})
 
 
 import concurrent.futures
@@ -169,32 +154,28 @@ def get_xm_url(filename_base, date_obj, esquema_nombre="Mensual", version_suffix
 def download_file(url, filename, save_dir="Descargas_XM"):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-
+        
     save_path = os.path.join(save_dir, filename)
-
-    for attempt in range(3):
-        try:
-            response = session.get(url, stream=True, timeout=45)
-            response.raise_for_status()
-
-            with open(save_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            print(f"¡Éxito! Guardado en: {save_path}")
-            return True
-        except requests.exceptions.HTTPError:
-            # 404/403 → el archivo no existe, no reintentar
-            return False
-        except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
-            if attempt < 2:
-                time.sleep(3 * (attempt + 1))  # espera 3s, 6s antes de reintentar
-                continue
-            print(f"Error SSL/conexión en {filename}: {e}")
-            return False
-        except Exception as e:
-            print(f"Error general en {filename}: {e}")
-            return False
-    return False
+    
+    # print(f"Descargando: {filename}...") # Comentado para evitar spam en hilos
+    # print(f"URL: {url}")
+    
+    try:
+        # Usamos la sesión global
+        response = session.get(url, stream=True, timeout=30)
+        response.raise_for_status() # Lanza error si es 404, 403, etc.
+        
+        with open(save_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        print(f"¡Éxito! Guardado en: {save_path}")
+        return True
+    except requests.exceptions.HTTPError:
+        # No imprimimos error 404 para no saturar consola en brute-force
+        return False
+    except Exception as e:
+        print(f"Error general en {filename}: {e}")
+        return False
 
 def clean_tie_file(filepath):
     """
@@ -320,21 +301,11 @@ def get_latest_balance_file(root_dir):
     if not files:
         return {}, "No hay archivos en 'Cuentas'", None
 
-    # Ordenar por fecha extraida del nombre, fallback a mtime
-    # Tupla de orden: (fecha_nombre, fecha_mtime)
-    def file_sort_key(fpath):
-        fname = os.path.basename(fpath)
-        d = _extract_date_from_name(fname)
-        mtime = os.path.getmtime(fpath)
-        # Si d existe, usamos timestamp de d. Si no, 0. El segundo criterio es mtime.
-        ts_d = d.timestamp() if d else 0
-        return (ts_d, mtime)
+    # Ordenar por fecha de modificación (o nombre si tiene fecha)
+    # Asumimos modificación por simplicidad, o nombre si queremos ser estrictos con la fecha en nombre
+    latest_file = max(files, key=os.path.getmtime)
+    file_date = datetime.fromtimestamp(os.path.getmtime(latest_file)).strftime("%Y-%m-%d")
 
-    latest_file = max(files, key=file_sort_key)
-    
-    # Debug info
-    # print(f"Latest Balance File: {latest_file}")
-    
     if pd is None: return {}, "Pandas no instalado", latest_file
 
     try:
@@ -369,19 +340,13 @@ def get_latest_balance_file(root_dir):
     except Exception as e:
         return {}, str(e), latest_file
 
-def calculate_debt_for_agent(root_dir, agent, start_date=None, end_date=None):
+def calculate_debt_for_agent(root_dir, agent, date_filter=None):
     """
     Calcula la deuda total de un agente escaneando su carpeta de esquema y TIE.
-    start_date: datetime (solo sumar archivos con fecha >= start_date). Si es None, hoy.
-    end_date: datetime (solo sumar archivos con fecha <= end_date). Si es None, sin limite superior.
+    date_filter: datetime (solo sumar archivos con fecha >= date_filter). Si es None, hoy.
     """
-    if start_date is None:
-        start_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Asegurar horas 0 para comparacion limpia
-    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    if end_date:
-        end_date = end_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+    if date_filter is None:
+        date_filter = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
     total_debt = 0.0
     details = [] # Lista de {archivo, valor}
@@ -405,67 +370,57 @@ def calculate_debt_for_agent(root_dir, agent, start_date=None, end_date=None):
             if not fname.lower().endswith(('.xlsx', '.xls')): continue
             
             # Extraer fecha del nombre para filtrar
+            # Reutilizamos lógica simple o regex
+            # Aquí haremos un parsing básico.
             try:
+                # Intento de heurística de fecha. 
+                # Si falla, asumimos que es reciente si la fecha de modificación es reciente?
+                # Mejor usar la fecha del archivo si es posible.
                 file_date = _extract_date_from_name(fname)
                 if not file_date:
                     # Fallback: file mtime
                     file_date = datetime.fromtimestamp(os.path.getmtime(os.path.join(folder_path, fname)))
                 
-                # Normalizar a media noche para comparacion
+                # Normalizar a media noche
                 file_date = file_date.replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                # COMPROBACION DE RANGO
-                if file_date < start_date:
-                    continue
-                if end_date and file_date > end_date:
+                if file_date < date_filter:
                     continue
 
                 # Procesar archivo
                 fpath = os.path.join(folder_path, fname)
                 df = pd.read_excel(fpath) # Header 0 por defecto
                 
-                # Buscar el Agente (Col 0 por defecto suele ser Código, pero en TIE raw puede ser Col 1)
+                # Buscar el Agente (Col 0 por defecto suele ser Código)
+                # TIE tiene estructura diferente (col 0 borrada, ahora col 0 es codigo?)
+                # Asumimos que la columna "Agente" o "Codigo" está en la primera posición disponible
                 
-                # Iteramos buscando el código en col 0 y col 1
+                # Iteramos buscando el código
                 found_val = 0.0
                 found = False
 
-                col_idx_found = -1
+                # Convert to string and upper for matching
+                # Check first column
+                col0 = df.iloc[:, 0].astype(str).str.strip().str.upper()
+                match = df[col0 == agent["codigo"]]
                 
-                # Check Col 0
-                if df.shape[1] > 0:
-                     col0 = df.iloc[:, 0].astype(str).str.strip().str.upper()
-                     match = df[col0 == agent["codigo"]]
-                     if not match.empty:
-                         col_idx_found = 0
-                
-                # Check Col 1 (if not found in 0)
-                if col_idx_found == -1 and df.shape[1] > 1:
-                     col1 = df.iloc[:, 1].astype(str).str.strip().str.upper()
-                     match = df[col1 == agent["codigo"]]
-                     if not match.empty:
-                         col_idx_found = 1
-
-                if col_idx_found != -1:
+                if not match.empty:
                     # Encontrado
                     if is_tie:
-                        # TIE: Valor en columna ? 
-                        # Si Code en 0 -> Val en 2 (Cleaned)
-                        # Si Code en 1 -> Val en 3 (Raw)
-                        # Delta es +2
-                        val_idx = col_idx_found + 2
+                        # TIE: Valor en columna ? (Original script: col 3 -> D)
+                        # Al borrar la primera col, se corre.
+                        # Asumamos que buscamos un valor numérico en las cols siguientes.
+                        # Original: col 3 (D). Si borramos A, ahora es C (2).
                         try:
-                            if df.shape[1] > val_idx:
-                                val = match.iloc[0, val_idx]
-                                found_val = float(val) if pd.notna(val) else 0.0
-                                found = True
+                            val = match.iloc[0, 2] # Index 2 = Col C
+                            found_val = float(val) if pd.notna(val) else 0.0
+                            found = True
                         except:
                             pass
                     else:
                         # Esquema normal: Sumar columnas desde la 3 en adelante?
-                        # Original: Desde col 3 (D).
-                        # Validar si esto cambia si el codigo está en otra col
-                        # Asumimos estructura fija para esquemas, solo TIE varia
+                        # Original script: "for let c = 3; c < matriz[f].length; c++"
+                        # Index 3 es Col D.
                         row_vals = match.iloc[0, 3:] # Desde col D
                         found_val = pd.to_numeric(row_vals, errors='coerce').sum()
                         found = True
@@ -476,47 +431,40 @@ def calculate_debt_for_agent(root_dir, agent, start_date=None, end_date=None):
 
             except Exception as e:
                 print(f"Error leyendo {fname}: {e}")
-                # details.append(f"[ERROR] {fname}: {str(e)}") # Optional debug
                 continue
                 
     return total_debt, details
 
 def _extract_date_from_name(filename):
-    """
-    Intenta extraer fecha de strings como 'GARANTIA 23ENE-2026.xlsx', '23ENE2026', o '2026-02-06'.
-    Basado en lógica de Script_automatizacion.txt.
-    """
-    meses_map = {
-        "JAN":0,"FEB":1,"MAR":2,"APR":3,"MAY":4,"JUN":5,"JUL":6,"AUG":7,"SEP":8,"OCT":9,"NOV":10,"DEC":11,
-        "ENE":0,"ABR":3,"AGO":7,"DIC":11
-    }
+    """ Intenta extraer fecha de strings como 'GARANTIA 23ENE-2026.xlsx' o '2026-02-06' """
+    # Diccionario meses
+    meses = {"ENE":1, "FEB":2, "MAR":3, "ABR":4, "MAY":5, "JUN":6, 
+             "JUL":7, "AGO":8, "SEP":9, "OCT":10, "NOV":11, "DIC":12,
+             "JAN":1, "APR":4, "AUG":8, "DEC":12} # Ingles/Español mix
     
     filename = filename.upper()
     try:
+        # ISO YYYY-MM-DD
         import re
-        # 1. Regex del Script: (d{1,2})(JAN|FEB...)[- ]?(d{4})
-        # Cubre 23ENE2026, 23-ENE-2026, 23 ENE 2026
-        meses_regex = "|".join(meses_map.keys())
-        pattern1 = r'(\d{1,2})(' + meses_regex + r')[- ]?(\d{4})'
-        m1 = re.search(pattern1, filename)
-        if m1:
-            day = int(m1.group(1))
-            month_idx = meses_map[m1.group(2)]
-            year = int(m1.group(3))
-            return datetime(year, month_idx + 1, day)
-
-        # 2. ISO YYYY-MM-DD o YYYY/MM/DD
-        m2 = re.search(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', filename)
-        if m2:
-             return datetime(int(m2.group(1)), int(m2.group(2)), int(m2.group(3)))
-
-        # 3. DD-MM-YYYY o DD/MM/YYYY
-        m3 = re.search(r'(\d{1,2})[-/](\d{1,2})[-/](\d{4})', filename)
-        if m3:
-             return datetime(int(m3.group(3)), int(m3.group(2)), int(m3.group(1)))
-
+        iso_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', filename)
+        if iso_match:
+            return datetime(int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3)))
+            
+        # Custom 23ENE-2026 (o similar)
+        # Buscamos combinaciones DDMMM
+        for mes, num in meses.items():
+            if mes in filename:
+                # Buscar dia antes
+                # Regex: (\d{1,2})MES
+                day_match = re.search(r'(\d{1,2})' + mes, filename)
+                year_match = re.search(r'(\d{4})', filename)
+                
+                if day_match and year_match:
+                    return datetime(int(year_match.group(0)), num, int(day_match.group(1)))
     except:
-        pass
+        return None
+    return None
+
     return None 
 
 def download_scheme_range(start_date, end_date, scheme_name, root_dir, max_workers=20, callback_log=None):
