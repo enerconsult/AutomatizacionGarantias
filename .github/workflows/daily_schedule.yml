@@ -26,26 +26,17 @@ jobs:
         # Aseguramos que se instalen las nuevas librerías de Google
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-    - name: Diagnóstico SSL portal XM
+    - name: Diagnóstico API portal XM
       run: |
-        echo "=== Mensual 08ABR - TLS 1.3 + headers de navegador (cuerpo completo) ==="
-        curl -s --tlsv1.3 \
-          -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
-          -H "Referer: https://app-portalxmcore01.azurewebsites.net/" \
-          -w "\n--- HTTP status: %{http_code} ---\n" \
-          "https://app-portalxmcore01.azurewebsites.net/administracion-archivos/ficheros/descarga-archivo?ruta=Energia+y+Mercado%2FGarantias+Mensuales%2F2026%2F04.+Abril%2FGARANTIA+SEMANAL+MENSUAL+08ABR-2026.xlsx&nombreBlobContainer=storageportalxm" 2>&1 || true
-        echo ""
-        echo "=== Cuentas 10ABR - TLS 1.3 + headers (cuerpo completo) ==="
-        curl -s --tlsv1.3 \
-          -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
-          -H "Referer: https://app-portalxmcore01.azurewebsites.net/" \
-          -w "\n--- HTTP status: %{http_code} ---\n" \
-          "https://app-portalxmcore01.azurewebsites.net/administracion-archivos/ficheros/descarga-archivo?ruta=Agentes%2FSaldosDiariosCuentasCustodia%2FSaldo+cuenta+custodia+2026-04-10.xlsx&nombreBlobContainer=storageportalxm" 2>&1 || true
-        echo ""
-        echo "=== Test sin --tlsv1.3 (negociacion libre) ==="
-        curl -s -w "\n--- HTTP status: %{http_code} ---\n" \
-          -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
-          "https://app-portalxmcore01.azurewebsites.net/administracion-archivos/ficheros/descarga-archivo?ruta=Energia+y+Mercado%2FGarantias+Mensuales%2F2026%2F04.+Abril%2FGARANTIA+SEMANAL+MENSUAL+08ABR-2026.xlsx&nombreBlobContainer=storageportalxm" 2>&1 || true
+        echo "=== Nuevo endpoint: api-portalxm.xm.com.co ==="
+        echo "--- Semanal 17ABR ---"
+        curl -s -w "\nHTTP status: %{http_code}\n" \
+          "https://api-portalxm.xm.com.co/administracion-archivos/ficheros/descarga-archivo?ruta=Energia%20y%20Mercado/Garantias%20Semanales/2026/04.%20Abril/GARANTIA%20SEMANAL%2017ABR-2026.xlsx&nombreBlobContainer=storageportalxm" \
+          -o /dev/null 2>&1 || true
+        echo "--- Cuentas 10ABR ---"
+        curl -s -w "\nHTTP status: %{http_code}\n" \
+          "https://api-portalxm.xm.com.co/administracion-archivos/ficheros/descarga-archivo?ruta=Agentes/SaldosDiariosCuentasCustodia/Saldo%20cuenta%20custodia%202026-04-10.xlsx&nombreBlobContainer=storageportalxm" \
+          -o /dev/null 2>&1 || true
 
     - name: Ejecutar script diario
       run: python run_daily.py

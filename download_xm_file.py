@@ -1,10 +1,10 @@
-import requests
 import urllib3
 import ssl
 import os
 import subprocess
 import shutil
 from datetime import datetime, timedelta
+from urllib.parse import quote
 import calendar
 import locale
 
@@ -153,19 +153,15 @@ def get_xm_url(filename_base, date_obj, esquema_nombre="Mensual", version_suffix
     
     
     # 3. URL
-    base_url = "https://app-portalxmcore01.azurewebsites.net/administracion-archivos/ficheros/descarga-archivo"
-    # Nota: Ya no agregamos "Energia y Mercado/" duro, viene en carp_garantias
-    # folder_path_part ya incluye timestamps si son necesarios, o es vacio si flat
+    # Nuevo endpoint desde ~12 abril 2026 (el antiguo app-portalxmcore01.azurewebsites.net fue dado de baja)
+    base_url = "https://api-portalxm.xm.com.co/administracion-archivos/ficheros/descarga-archivo"
     blob_path = f"{carp_garantias}{folder_path_part}/{full_filename}"
-    
-    params = {
-        'ruta': blob_path,
-        'nombreBlobContainer': 'storageportalxm'
-    }
-    
-    req = requests.Request('GET', base_url, params=params)
-    prepped = req.prepare()
-    return prepped.url, full_filename
+
+    # Codificar: espacios -> %20, slashes -> sin codificar (igual que el navegador)
+    encoded_ruta = quote(blob_path, safe='/')
+    url = f"{base_url}?ruta={encoded_ruta}&nombreBlobContainer=storageportalxm"
+
+    return url, full_filename
 
 def download_file(url, filename, save_dir="Descargas_XM"):
     if not os.path.exists(save_dir):
