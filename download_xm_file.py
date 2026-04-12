@@ -166,7 +166,7 @@ def download_file(url, filename, save_dir="Descargas_XM"):
         # Linux / GitHub Actions: curl negocia TLS correctamente con el servidor XM
         try:
             result = subprocess.run(
-                [_CURL, '-s', '-o', save_path, '-w', '%{http_code}', '--max-time', '30', url],
+                [_CURL, '-s', '--tlsv1.3', '-o', save_path, '-w', '%{http_code}', '--max-time', '30', url],
                 capture_output=True, timeout=45, text=True
             )
             http_code = result.stdout.strip()

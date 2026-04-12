@@ -28,12 +28,12 @@ jobs:
 
     - name: Diagnóstico SSL portal XM
       run: |
-        echo "=== Curl URL real - Cuentas 10ABR ==="
-        curl -v -o /dev/null -w "HTTP status: %{http_code}\n" \
-          "https://app-portalxmcore01.azurewebsites.net/administracion-archivos/ficheros/descarga-archivo?ruta=Agentes%2FSaldosDiariosCuentasCustodia%2FSaldo+cuenta+custodia+2026-04-10.xlsx&nombreBlobContainer=storageportalxm" 2>&1 || true
-        echo "=== Curl URL real - Mensual 08ABR ==="
-        curl -v -o /dev/null -w "HTTP status: %{http_code}\n" \
+        echo "=== Mensual 08ABR (TLS 1.3 forzado) - respuesta completa ==="
+        curl -s --tlsv1.3 -w "\nHTTP status: %{http_code}\n" \
           "https://app-portalxmcore01.azurewebsites.net/administracion-archivos/ficheros/descarga-archivo?ruta=Energia+y+Mercado%2FGarantias+Mensuales%2F2026%2F04.+Abril%2FGARANTIA+SEMANAL+MENSUAL+08ABR-2026.xlsx&nombreBlobContainer=storageportalxm" 2>&1 || true
+        echo "=== Cuentas 10ABR (TLS 1.3 forzado) ==="
+        curl -s --tlsv1.3 -w "\nHTTP status: %{http_code}\n" \
+          "https://app-portalxmcore01.azurewebsites.net/administracion-archivos/ficheros/descarga-archivo?ruta=Agentes%2FSaldosDiariosCuentasCustodia%2FSaldo+cuenta+custodia+2026-04-10.xlsx&nombreBlobContainer=storageportalxm" 2>&1 || true
 
     - name: Ejecutar script diario
       run: python run_daily.py
