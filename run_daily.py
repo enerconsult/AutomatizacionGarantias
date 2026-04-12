@@ -40,11 +40,11 @@ def main():
             log_func = lambda msg: print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
             
             count, days = download_xm_file.download_scheme_range(
-                start_date, 
-                end_date, 
-                scheme, 
-                root_dir, 
-                max_workers=10, # Un poco más conservador para background
+                start_date,
+                end_date,
+                scheme,
+                root_dir,
+                max_workers=40,  # El nuevo API es lento (~6s/404); más workers compensan
                 callback_log=log_func
             )
             total_files += count

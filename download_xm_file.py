@@ -17,20 +17,17 @@ except ImportError:
 # El servidor XM rechaza TLS 1.2 con EOF desde ~10 abril.
 # Solución: forzar TLS 1.3 mínimo en urllib3 usando ssl_minimum_version
 # (parámetro nativo de urllib3 v2.x, más confiable que pasar ssl_context).
-import platform
-_CURL = shutil.which('curl') if platform.system() != 'Windows' else None
-
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Pool con TLS 1.3 mínimo para conexiones locales (Windows) vía requests
+# Pool compartido para todas las plataformas (Linux y Windows).
+# num_pools alto + maxsize alto → reutiliza conexiones TCP/TLS entre requests del threadpool,
+# evitando el overhead de spawn de proceso por cada curl subprocess.
 _https_pool = urllib3.PoolManager(
-    num_pools=20,
-    maxsize=20,
-    ssl_minimum_version=ssl.TLSVersion.TLSv1_3,
+    num_pools=10,
+    maxsize=50,
     cert_reqs='CERT_NONE',
     headers={
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Referer': 'https://app-portalxmcore01.azurewebsites.net/',
     }
 )
 
@@ -169,51 +166,26 @@ def download_file(url, filename, save_dir="Descargas_XM"):
 
     save_path = os.path.join(save_dir, filename)
 
-    if _CURL:
-        # Linux / GitHub Actions: curl negocia TLS correctamente con el servidor XM
-        try:
-            result = subprocess.run(
-                [_CURL, '-s', '--tlsv1.3',
-                 '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                 '-H', 'Referer: https://app-portalxmcore01.azurewebsites.net/',
-                 '-o', save_path, '-w', '%{http_code}', '--max-time', '30', url],
-                capture_output=True, timeout=45, text=True
-            )
-            http_code = result.stdout.strip()
-            if http_code == '200':
-                print(f"¡Éxito! Guardado en: {save_path}")
-                return True
-            # Loguear cualquier respuesta que NO sea 404 (404 es normal para brute-force)
-            if http_code != '404':
-                print(f"[HTTP {http_code}] {filename}")
-            if os.path.exists(save_path):
-                os.remove(save_path)
-            return False
-        except Exception as e:
-            print(f"Error general en {filename}: {e}")
-            return False
-    else:
-        # Windows / ejecución local: usar urllib3 con TLS 1.3 mínimo
-        try:
-            resp = _https_pool.request('GET', url, preload_content=False, timeout=30)
-            if resp.status == 200:
-                with open(save_path, 'wb') as f:
-                    for chunk in resp.stream(8192):
-                        f.write(chunk)
-                resp.release_conn()
-                print(f"¡Éxito! Guardado en: {save_path}")
-                return True
+    try:
+        resp = _https_pool.request('GET', url, preload_content=False, timeout=15)
+        if resp.status == 200:
+            with open(save_path, 'wb') as f:
+                for chunk in resp.stream(8192):
+                    f.write(chunk)
             resp.release_conn()
-            if resp.status != 404:
-                print(f"[HTTP {resp.status}] {filename}")
-            if os.path.exists(save_path):
-                os.remove(save_path)
-            return False
-        except Exception as e:
-            print(f"Error general en {filename}: {e}")
-            if os.path.exists(save_path):
-                os.remove(save_path)
-            return False
+            print(f"¡Éxito! Guardado en: {save_path}")
+            return True
+        resp.release_conn()
+        if resp.status not in (404, 500):  # 404/500 = archivo no existe, no loguear
+            print(f"[HTTP {resp.status}] {filename}")
+        if os.path.exists(save_path):
+            os.remove(save_path)
+        return False
+    except Exception as e:
+        print(f"Error general en {filename}: {e}")
+        if os.path.exists(save_path):
+            os.remove(save_path)
+        return False
 
 def clean_tie_file(filepath):
     """
@@ -533,23 +505,21 @@ def download_scheme_range(start_date, end_date, scheme_name, root_dir, max_worke
     
     tasks = []
     versions = ["", "_V2"]
-    extensions = [".xlsx", ".XLSX", ".xls", ".XLS"]
-    
+    extensions = [".xlsx", ".XLSX"]  # El nuevo API usa exclusivamente .xlsx; .xls ya no se publica
+
     current_date = start_date
     delta = timedelta(days=1)
     days_count = 0
-    
+
     while current_date <= end_date:
         days_count += 1
         for file_base in files_to_try:
-            variations = [file_base, file_base + " ", file_base.replace(" ", "  ")]
-            variations = list(set(variations))
-            
-            for variant in variations:
-                for ver in versions:
-                    for ext in extensions:
-                        url, filename = get_xm_url(variant, current_date, esquema_nombre=scheme_name, version_suffix=ver, extension=ext)
-                        tasks.append((url, filename, scheme_folder, scheme_name))
+            # Solo el nombre canónico — las variantes con espacios dobles/trailing
+            # eran artefactos del antiguo portal, el nuevo API no las usa.
+            for ver in versions:
+                for ext in extensions:
+                    url, filename = get_xm_url(file_base, current_date, esquema_nombre=scheme_name, version_suffix=ver, extension=ext)
+                    tasks.append((url, filename, scheme_folder, scheme_name))
         current_date += delta
         
     found_count = 0
