@@ -12,13 +12,19 @@ jobs:
     steps:
     - name: Checkout código
       uses: actions/checkout@v3
-      
+
+    - name: Restaurar caché de archivos descargados
+      uses: actions/cache@v3
+      with:
+        path: ./Garantías
+        key: garantias-${{ github.run_id }}
+        restore-keys: |
+          garantias-
+
     - name: Configurar Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-
-    # Eliminamos el paso de "Instalar rclone" ya que no se usa
 
     - name: Instalar dependencias
       run: |

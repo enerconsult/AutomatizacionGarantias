@@ -166,6 +166,10 @@ def download_file(url, filename, save_dir="Descargas_XM"):
 
     save_path = os.path.join(save_dir, filename)
 
+    # Si el archivo ya existe (de una ejecución anterior o caché), no re-descargar
+    if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
+        return True
+
     try:
         resp = _https_pool.request('GET', url, preload_content=False, timeout=15)
         if resp.status == 200:
@@ -505,7 +509,7 @@ def download_scheme_range(start_date, end_date, scheme_name, root_dir, max_worke
     
     tasks = []
     versions = ["", "_V2"]
-    extensions = [".xlsx", ".XLSX"]  # El nuevo API usa exclusivamente .xlsx; .xls ya no se publica
+    extensions = [".xlsx", ".XLSX", ".xls", ".XLS"]
 
     current_date = start_date
     delta = timedelta(days=1)
@@ -514,12 +518,13 @@ def download_scheme_range(start_date, end_date, scheme_name, root_dir, max_worke
     while current_date <= end_date:
         days_count += 1
         for file_base in files_to_try:
-            # Solo el nombre canónico — las variantes con espacios dobles/trailing
-            # eran artefactos del antiguo portal, el nuevo API no las usa.
-            for ver in versions:
-                for ext in extensions:
-                    url, filename = get_xm_url(file_base, current_date, esquema_nombre=scheme_name, version_suffix=ver, extension=ext)
-                    tasks.append((url, filename, scheme_folder, scheme_name))
+            variations = [file_base, file_base + " ", file_base.replace(" ", "  ")]
+            variations = list(set(variations))
+            for variant in variations:
+                for ver in versions:
+                    for ext in extensions:
+                        url, filename = get_xm_url(variant, current_date, esquema_nombre=scheme_name, version_suffix=ver, extension=ext)
+                        tasks.append((url, filename, scheme_folder, scheme_name))
         current_date += delta
         
     found_count = 0
