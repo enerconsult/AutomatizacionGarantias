@@ -516,8 +516,18 @@ def download_scheme_range(start_date, end_date, scheme_name, root_dir, max_worke
     if callback_log: callback_log(f"Rango: {start_date.strftime('%Y-%m-%d')} a {end_date.strftime('%Y-%m-%d')}")
     
     tasks = []
-    versions = ["", "_V2"]
-    extensions = [".xlsx", ".XLSX", ".xls", ".XLS"]
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Dos niveles de búsqueda para equilibrar cobertura vs. velocidad:
+    # - Fechas recientes (hasta hoy): todas las variaciones de nombre/extensión/versión,
+    #   porque XM puede publicar con errores de nombrado que ya conocemos.
+    # - Fechas futuras (mañana en adelante): solo nombre canónico + .xlsx/.XLSX,
+    #   sin variantes de espacios ni _V2. Esos archivos no existen aún, no importa
+    #   cuántas formas probemos — ahorra ~60% de requests al servidor.
+    versions_full     = ["", "_V2"]
+    extensions_full   = [".xlsx", ".XLSX", ".xls", ".XLS"]
+    versions_future   = [""]
+    extensions_future = [".xlsx", ".XLSX"]
 
     current_date = start_date
     delta = timedelta(days=1)
@@ -525,14 +535,25 @@ def download_scheme_range(start_date, end_date, scheme_name, root_dir, max_worke
 
     while current_date <= end_date:
         days_count += 1
-        for file_base in files_to_try:
-            variations = [file_base, file_base + " ", file_base.replace(" ", "  ")]
-            variations = list(set(variations))
-            for variant in variations:
-                for ver in versions:
-                    for ext in extensions:
-                        url, filename = get_xm_url(variant, current_date, esquema_nombre=scheme_name, version_suffix=ver, extension=ext)
+        is_future = current_date > today
+
+        if is_future:
+            # Fecha futura: mínimas combinaciones (archivo no publicado aún)
+            for file_base in files_to_try:
+                for ver in versions_future:
+                    for ext in extensions_future:
+                        url, filename = get_xm_url(file_base, current_date, esquema_nombre=scheme_name, version_suffix=ver, extension=ext)
                         tasks.append((url, filename, scheme_folder, scheme_name))
+        else:
+            # Fecha reciente/hoy: todas las variaciones (XM comete errores de nombrado)
+            for file_base in files_to_try:
+                variations = [file_base, file_base + " ", file_base.replace(" ", "  ")]
+                variations = list(set(variations))
+                for variant in variations:
+                    for ver in versions_full:
+                        for ext in extensions_full:
+                            url, filename = get_xm_url(variant, current_date, esquema_nombre=scheme_name, version_suffix=ver, extension=ext)
+                            tasks.append((url, filename, scheme_folder, scheme_name))
         current_date += delta
         
     found_count = 0
