@@ -521,13 +521,15 @@ def download_scheme_range(start_date, end_date, scheme_name, root_dir, max_worke
     # Dos niveles de búsqueda para equilibrar cobertura vs. velocidad:
     # - Fechas recientes (hasta hoy): todas las variaciones de nombre/extensión/versión,
     #   porque XM puede publicar con errores de nombrado que ya conocemos.
-    # - Fechas futuras (mañana en adelante): solo nombre canónico + .xlsx/.XLSX,
-    #   sin variantes de espacios ni _V2. Esos archivos no existen aún, no importa
-    #   cuántas formas probemos — ahorra ~60% de requests al servidor.
+    # - Fechas futuras (mañana en adelante): solo nombre canónico + extensiones comunes,
+    #   sin variantes de espacios ni _V2. Ahorra requests vs. búsqueda completa.
+    #   IMPORTANTE: incluir .xls porque archivos TIE son siempre publicados con fecha
+    #   futura (ej: archivo del lunes se publica el jueves anterior) y pueden llegar en
+    #   formato .xls (Excel 97-2003).
     versions_full     = ["", "_V2"]
     extensions_full   = [".xlsx", ".XLSX", ".xls", ".XLS"]
     versions_future   = [""]
-    extensions_future = [".xlsx", ".XLSX"]
+    extensions_future = [".xlsx", ".XLSX", ".xls", ".XLS"]
 
     current_date = start_date
     delta = timedelta(days=1)
