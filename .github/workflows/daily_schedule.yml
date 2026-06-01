@@ -43,6 +43,14 @@ jobs:
         curl -s -w "\nHTTP status: %{http_code}\n" \
           "https://api-portalxm.xm.com.co/administracion-archivos/ficheros/descarga-archivo?ruta=Agentes/SaldosDiariosCuentasCustodia/Saldo%20cuenta%20custodia%202026-04-10.xlsx&nombreBlobContainer=storageportalxm" \
           -o /dev/null 2>&1 || true
+        echo "--- TIE 02JUN (xlsx) ---"
+        curl -s -w "\nHTTP status: %{http_code}\n" \
+          "https://api-portalxm.xm.com.co/administracion-archivos/ficheros/descarga-archivo?ruta=Agentes/Garantias%20Financieras%20TIE/2026/06.Junio/WEB_GARANTIES-02-06-2026.xlsx&nombreBlobContainer=storageportalxm" \
+          -o /dev/null 2>&1 || true
+        echo "--- TIE 02JUN (xls) ---"
+        curl -s -w "\nHTTP status: %{http_code}\n" \
+          "https://api-portalxm.xm.com.co/administracion-archivos/ficheros/descarga-archivo?ruta=Agentes/Garantias%20Financieras%20TIE/2026/06.Junio/WEB_GARANTIES-02-06-2026.xls&nombreBlobContainer=storageportalxm" \
+          -o /dev/null 2>&1 || true
 
     - name: Ejecutar script diario
       run: python run_daily.py
