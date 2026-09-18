@@ -51,14 +51,18 @@ ESQUEMAS = {
             "GARANTIA TXR",
             "GARANTIA MENSUAL",
             "GARANTIA CUOTA RES 101 029 2022"
-        ]
+        ],
+        # XM cambió el formato de nombre a partir de sep-2026: de "04SEP-2026" a "2026-09-04"
+        "formatos_fecha_extra": ["ISO"]
     },
     "Semanal": {
         "carpeta_url": "Energia y Mercado/Garantias Semanales",
         "archivos": [
             "GARANTIA SEMANAL",
             "GARANTIA TXR"
-        ]
+        ],
+        # XM cambió el formato de nombre a partir de sep-2026: de "04SEP-2026" a "2026-09-04"
+        "formatos_fecha_extra": ["ISO"]
     },
     "TIE": {
         "carpeta_url": "Agentes/Garantias Financieras TIE",
@@ -81,18 +85,19 @@ ESQUEMAS = {
     }
 }
 
-def get_xm_url(filename_base, date_obj, esquema_nombre="Mensual", version_suffix="", extension=".xlsx"):
+def get_xm_url(filename_base, date_obj, esquema_nombre="Mensual", version_suffix="", extension=".xlsx", formato_fecha_override=None):
     """
     Genera la URL de descarga basándose en el esquema y fecha.
     version_suffix: Sufijo opcional (ej: "_V2") que se agrega antes de la extensión.
     extension: Extensión del archivo (ej: ".xlsx", ".XLSX").
+    formato_fecha_override: Si se especifica, sobreescribe el formato_fecha del esquema.
     """
-    
+
     # Obtener configuración del esquema
     if esquema_nombre in ESQUEMAS:
         config = ESQUEMAS[esquema_nombre]
         carp_garantias = config["carpeta_url"]
-        formato_fecha = config.get("formato_fecha", "TEXTO") # TEXTO (23ENE), NUMERICO (23-01), ISO (2026-02-06)
+        formato_fecha = formato_fecha_override or config.get("formato_fecha", "TEXTO") # TEXTO (23ENE), NUMERICO (23-01), ISO (2026-02-06)
         separador = config.get("separador", " ")
         formato_carpeta_mes = config.get("formato_carpeta_mes", "CON_ESPACIO")
         incluir_path_fecha = config.get("incluir_path_fecha", True)
@@ -531,6 +536,9 @@ def download_scheme_range(start_date, end_date, scheme_name, root_dir, max_worke
     versions_future   = [""]
     extensions_future = [".xlsx", ".XLSX", ".xls", ".XLS"]
 
+    # Formatos de fecha adicionales a probar (ej: ISO para Mensual/Semanal desde sep-2026)
+    formatos_extra = config.get("formatos_fecha_extra", [])
+
     current_date = start_date
     delta = timedelta(days=1)
     days_count = 0
@@ -546,6 +554,10 @@ def download_scheme_range(start_date, end_date, scheme_name, root_dir, max_worke
                     for ext in extensions_future:
                         url, filename = get_xm_url(file_base, current_date, esquema_nombre=scheme_name, version_suffix=ver, extension=ext)
                         tasks.append((url, filename, scheme_folder, scheme_name))
+                        for fmt_extra in formatos_extra:
+                            url2, fn2 = get_xm_url(file_base, current_date, esquema_nombre=scheme_name, version_suffix=ver, extension=ext, formato_fecha_override=fmt_extra)
+                            if fn2 != filename:
+                                tasks.append((url2, fn2, scheme_folder, scheme_name))
         else:
             # Fecha reciente/hoy: todas las variaciones (XM comete errores de nombrado)
             for file_base in files_to_try:
@@ -556,6 +568,10 @@ def download_scheme_range(start_date, end_date, scheme_name, root_dir, max_worke
                         for ext in extensions_full:
                             url, filename = get_xm_url(variant, current_date, esquema_nombre=scheme_name, version_suffix=ver, extension=ext)
                             tasks.append((url, filename, scheme_folder, scheme_name))
+                            for fmt_extra in formatos_extra:
+                                url2, fn2 = get_xm_url(variant, current_date, esquema_nombre=scheme_name, version_suffix=ver, extension=ext, formato_fecha_override=fmt_extra)
+                                if fn2 != filename:
+                                    tasks.append((url2, fn2, scheme_folder, scheme_name))
         current_date += delta
         
     found_count = 0
